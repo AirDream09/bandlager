@@ -1965,8 +1965,8 @@ function songToDBRecord(song){
     dateAdded: song.dateAdded, lyrics: song.lyrics || '', lyricsSync: song.lyricsSync || null, size: song.size || 0
   };
 }
-function dbPutSong(song){ const s = dbStore('songs','readwrite'); if(s) s.put(songToDBRecord(song)); }
-function dbDeleteSong(id){ const s = dbStore('songs','readwrite'); if(s) s.delete(id); }
+function dbPutSong(song){ const s = dbStore('songs','readwrite'); if(s) s.put(songToDBRecord(song)); scheduleAutoBackup(); }
+function dbDeleteSong(id){ const s = dbStore('songs','readwrite'); if(s) s.delete(id); scheduleAutoBackup(); }
 function dbClearSongs(){ const s = dbStore('songs','readwrite'); if(s) s.clear(); }
 function dbGetAllSongs(){
   return new Promise(resolve => {
@@ -1977,8 +1977,8 @@ function dbGetAllSongs(){
     req.onerror = () => resolve([]);
   });
 }
-function dbPutPlaylist(pl){ const s = dbStore('playlists','readwrite'); if(s) s.put({id:pl.id, name:pl.name, songIds:pl.songIds}); }
-function dbDeletePlaylist(id){ const s = dbStore('playlists','readwrite'); if(s) s.delete(id); }
+function dbPutPlaylist(pl){ const s = dbStore('playlists','readwrite'); if(s) s.put({id:pl.id, name:pl.name, songIds:pl.songIds}); scheduleAutoBackup(); }
+function dbDeletePlaylist(id){ const s = dbStore('playlists','readwrite'); if(s) s.delete(id); scheduleAutoBackup(); }
 function dbClearPlaylists(){ const s = dbStore('playlists','readwrite'); if(s) s.clear(); }
 function dbGetAllPlaylists(){
   return new Promise(resolve => {
@@ -1989,7 +1989,7 @@ function dbGetAllPlaylists(){
     req.onerror = () => resolve([]);
   });
 }
-function dbSetSetting(key, value){ const s = dbStore('settings','readwrite'); if(s){ try{ s.put(value, key); }catch(e){} } }
+function dbSetSetting(key, value){ const s = dbStore('settings','readwrite'); if(s){ try{ s.put(value, key); }catch(e){} } scheduleAutoBackup(); }
 function dbGetSetting(key){
   return new Promise(resolve => {
     const s = dbStore('settings','readonly');
@@ -2000,6 +2000,92 @@ function dbGetSetting(key){
       req.onerror = () => resolve(undefined);
     }catch(e){ resolve(undefined); }
   });
+}
+
+/* ============================= ZUSÄTZLICHES LOKALES BACKUP (localStorage) =============================
+   Verlauf, Playlists, Statistiken und Erfolge werden zusätzlich zur IndexedDB kompakt (ohne
+   Audiodaten) in localStorage gespiegelt. Das ist ein zweiter, unabhängiger Speicherort im
+   Browser: falls die IndexedDB durch den Browser geleert wird (z.B. Speicherbereinigung,
+   Privatmodus, Speicherdruck), stellt Bandlager diese Daten beim nächsten Start automatisch
+   wieder her — ohne bestehende Daten zu überschreiben, es wird nur ergänzt. */
+const AUTO_BACKUP_KEY = 'bandlagerAutoBackup_v1';
+let _autoBackupTimer = null;
+function scheduleAutoBackup(){
+  clearTimeout(_autoBackupTimer);
+  _autoBackupTimer = setTimeout(saveAutoBackup, 1200);
+}
+function saveAutoBackup(){
+  try{
+    const songStats = {};
+    (typeof songs !== 'undefined' ? songs : []).forEach(s => {
+      songStats[s.id] = { playCount:s.playCount||0, secondsListened:s.secondsListened||0, title:s.title, artist:s.artist };
+    });
+    const payload = {
+      savedAt: Date.now(),
+      playHistory: typeof playHistory !== 'undefined' ? playHistory : [],
+      playlists: typeof playlists !== 'undefined' ? playlists.map(p => ({id:p.id, name:p.name, songIds:p.songIds})) : [],
+      earnedAchievements: typeof earnedAchievements !== 'undefined' ? earnedAchievements : [],
+      adState: typeof adState !== 'undefined' ? adState : null,
+      ownedPacks: typeof ownedPacks !== 'undefined' ? ownedPacks : [],
+      songStats
+    };
+    localStorage.setItem(AUTO_BACKUP_KEY, JSON.stringify(payload));
+  }catch(e){ /* z.B. Speicher voll oder localStorage gesperrt — IndexedDB bleibt die primäre Ablage */ }
+}
+function loadAutoBackup(){
+  try{
+    const raw = localStorage.getItem(AUTO_BACKUP_KEY);
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+// Ergänzt fehlende Verläufe/Playlists/Statistiken/Erfolge aus dem lokalen Backup, OHNE
+// vorhandene Daten zu ersetzen oder zu verringern. Wird beim Start nach dem Laden aus
+// der IndexedDB aufgerufen.
+function restoreFromAutoBackupIfNeeded(){
+  const backup = loadAutoBackup();
+  if(!backup) return;
+  let restored = false;
+  if(Array.isArray(backup.playlists) && backup.playlists.length){
+    backup.playlists.forEach(bp => {
+      if(!bp || !bp.id) return;
+      if(!playlists.some(p => p.id === bp.id)){
+        const restoredIds = (bp.songIds||[]).filter(id => songs.some(s => s.id === id));
+        const pl = { id: bp.id, name: bp.name || 'Playlist', songIds: restoredIds };
+        playlists.push(pl); dbPutPlaylist(pl); restored = true;
+      }
+    });
+  }
+  if(Array.isArray(backup.playHistory) && backup.playHistory.length){
+    const known = new Set(playHistory.map(h => h.songId+'|'+h.playedAt));
+    backup.playHistory.forEach(h => {
+      if(h && h.songId && h.playedAt && !known.has(h.songId+'|'+h.playedAt)){
+        playHistory.push(h); known.add(h.songId+'|'+h.playedAt); restored = true;
+      }
+    });
+    if(restored){
+      playHistory.sort((a,b) => a.playedAt - b.playedAt);
+      if(playHistory.length > HISTORY_LIMIT) playHistory = playHistory.slice(playHistory.length - HISTORY_LIMIT);
+      dbSetSetting('playHistory', playHistory);
+    }
+  }
+  if(Array.isArray(backup.earnedAchievements) && backup.earnedAchievements.length){
+    let gotNew = false;
+    backup.earnedAchievements.forEach(id => {
+      if(!earnedAchievements.includes(id) && ACHIEVEMENTS.some(a => a.id === id)){ earnedAchievements.push(id); gotNew = true; }
+    });
+    if(gotNew){ dbSetSetting('earnedAchievements', earnedAchievements); restored = true; }
+  }
+  if(backup.songStats){
+    songs.forEach(s => {
+      const bs = backup.songStats[s.id];
+      if(!bs) return;
+      // Werte werden nie verringert, nur auf das jeweilige Maximum angehoben
+      const pc = Math.max(s.playCount||0, bs.playCount||0);
+      const sl = Math.max(s.secondsListened||0, bs.secondsListened||0);
+      if(pc !== s.playCount || sl !== s.secondsListened){ s.playCount = pc; s.secondsListened = sl; dbPutSong(s); restored = true; }
+    });
+  }
+  if(restored) toast('Aus lokalem Backup ergänzt (Verlauf/Playlists/Statistiken) ✓');
 }
 
 /* ============================= MOBILES MENÜ ============================= */
@@ -3909,10 +3995,13 @@ async function exportLibrary(){
       topArtists
     };
     const meta = {
-      format: 'bandlager-library', version: 3,
+      format: 'bandlager-library', version: 4,
       exportedAt: Date.now(),
       songs: songsMeta,
       playlists: playlists,
+      playHistory: playHistory,
+      earnedAchievements: earnedAchievements,
+      adState: adState,
       stats: stats,
       plan: { ownedPacks: ownedPacks }
     };
@@ -3956,11 +4045,9 @@ async function handleLibraryImport(file){
     toast('Lese Bibliotheksdatei ein…');
     const { data, newSongs } = isZip ? await loadZipLibrary(file) : await loadJsonLibrary(file);
     if(!data || data.format !== 'bandlager-library'){ toast('Ungültige Bibliotheksdatei.'); return; }
-    if(songs.length > 0){
-      showConfirmModal('Aktuelle Bibliothek durch die importierte ersetzen? (Playlists werden ebenfalls ersetzt)', () => finalizeImport(data, newSongs));
-    } else {
-      finalizeImport(data, newSongs);
-    }
+    // Import führt IMMER zusammen statt zu ersetzen: bestehende Songs, Playlists, Verlauf
+    // und Statistiken bleiben erhalten, es werden nur neue/fehlende Inhalte ergänzt.
+    finalizeImport(data, newSongs);
   }catch(e){
     console.error('Import fehlgeschlagen:', e);
     toast('Fehler beim Importieren der Datei.');
@@ -4011,9 +4098,13 @@ function buildImportedSong(s, blob, objectUrl){
   };
 }
 
+// Führt eine importierte Sicherung MIT der aktuellen Bibliothek zusammen. Nichts wird
+// ersetzt oder gelöscht — bestehende Songs, Playlists, Verlauf, Statistiken und Erfolge
+// bleiben erhalten, es werden nur neue bzw. fehlende Inhalte ergänzt. Zahlenwerte
+// (Wiedergaben, Hörzeit) werden nie verringert, sondern nur auf das Maximum angehoben.
 async function finalizeImport(data, newSongs){
   try{
-    toast('Importiere Bibliothek…');
+    toast('Führe Bibliothek zusammen…');
 
     // Speicherpakete aus dem Export übernehmen (falls vorhanden) — bereits vorhandene
     // Pakete gehen dabei nicht verloren, es wird jeweils das Maximum je Pakettyp behalten.
@@ -4027,31 +4118,87 @@ async function finalizeImport(data, newSongs){
     }
     const mergedLimit = PLAN_FREE_LIMIT + mergedPacks.reduce((sum,id) => sum + (packById(id)?.bytes||0), 0);
 
-    const totalBytes = newSongs.reduce((sum,s) => sum + (s.size||0), 0);
-    if(totalBytes > mergedLimit){
+    // Nur wirklich neue Songs (unbekannte ID) benötigen zusätzlichen Speicherplatz.
+    // Bei bereits vorhandenen Songs werden nur die Statistiken zusammengeführt, die
+    // doppelten Audiodaten aus dem Import werden verworfen.
+    const existingIds = new Set(songs.map(s => s.id));
+    const brandNewSongs = newSongs.filter(s => !existingIds.has(s.id));
+    const duplicateIncoming = newSongs.filter(s => existingIds.has(s.id));
+    const addedBytes = brandNewSongs.reduce((sum,s) => sum + (s.size||0), 0);
+    const currentBytes = libraryBytesUsed();
+    if(currentBytes + addedBytes > mergedLimit){
       newSongs.forEach(s => URL.revokeObjectURL(s.objectUrl)); // wird nicht übernommen, Blobs wieder freigeben
       _pendingImportRetry = () => finalizeImport(data, newSongs);
-      openPaywallModal(0, totalBytes, mergedLimit);
+      openPaywallModal(currentBytes, addedBytes, mergedLimit);
       toast('Die importierte Bibliothek passt nicht in deinen aktuellen Speicherplan.');
       return;
     }
 
-    // alte Bibliothek erst jetzt ersetzen, da der Import passt
-    songs.forEach(s => URL.revokeObjectURL(s.objectUrl));
-    songs = newSongs;
-    playlists = (data.playlists||[]).map(p => ({id:p.id||uid('pl'), name:p.name, songIds:(p.songIds||[]).filter(id=>newSongs.find(s=>s.id===id))}));
+    // Statistiken bei bereits vorhandenen Songs zusammenführen (Werte werden nie verringert)
+    duplicateIncoming.forEach(ns => {
+      const existing = songs.find(s => s.id === ns.id);
+      if(existing){
+        existing.playCount = Math.max(existing.playCount||0, ns.playCount||0);
+        existing.secondsListened = Math.max(existing.secondsListened||0, ns.secondsListened||0);
+        if(!existing.lyrics && ns.lyrics) existing.lyrics = ns.lyrics;
+        if(!existing.lyricsSync && ns.lyricsSync) existing.lyricsSync = ns.lyricsSync;
+        if(!existing.coverData && ns.coverData) existing.coverData = ns.coverData;
+        dbPutSong(existing);
+      }
+      URL.revokeObjectURL(ns.objectUrl); // Audiodaten des Duplikats werden nicht übernommen
+    });
+
+    // neue Songs hinzufügen — bestehende Songs bleiben dabei unangetastet
+    brandNewSongs.forEach(s => { songs.push(s); dbPutSong(s); });
+
+    // Playlists zusammenführen: bestehende Playlisten bleiben erhalten, Songs aus
+    // importierten Playlisten gleichen Namens/gleicher ID werden ergänzt; komplett neue
+    // Playlisten werden hinzugefügt.
+    (data.playlists||[]).forEach(ip => {
+      if(!ip) return;
+      const validIds = (ip.songIds||[]).filter(id => songs.some(s => s.id === id));
+      const existingPl = playlists.find(p => p.id === ip.id) || (ip.name ? playlists.find(p => p.name === ip.name) : null);
+      if(existingPl){
+        validIds.forEach(id => { if(!existingPl.songIds.includes(id)) existingPl.songIds.push(id); });
+        dbPutPlaylist(existingPl);
+      } else {
+        const pl = { id: ip.id || uid('pl'), name: ip.name || 'Importierte Playlist', songIds: validIds };
+        playlists.push(pl);
+        dbPutPlaylist(pl);
+      }
+    });
+
+    // Wiedergabeverlauf zusammenführen (keine Duplikate anhand Song-ID + Zeitstempel)
+    if(Array.isArray(data.playHistory) && data.playHistory.length){
+      const known = new Set(playHistory.map(h => h.songId+'|'+h.playedAt));
+      data.playHistory.forEach(h => {
+        if(h && h.songId && h.playedAt && songs.some(s => s.id === h.songId) && !known.has(h.songId+'|'+h.playedAt)){
+          playHistory.push(h); known.add(h.songId+'|'+h.playedAt);
+        }
+      });
+      playHistory.sort((a,b) => a.playedAt - b.playedAt);
+      if(playHistory.length > HISTORY_LIMIT) playHistory = playHistory.slice(playHistory.length - HISTORY_LIMIT);
+      dbSetSetting('playHistory', playHistory);
+    }
+
+    // Erfolge zusammenführen (Vereinigung)
+    if(Array.isArray(data.earnedAchievements) && data.earnedAchievements.length){
+      data.earnedAchievements.forEach(id => { if(!earnedAchievements.includes(id) && ACHIEVEMENTS.some(a => a.id === id)) earnedAchievements.push(id); });
+      dbSetSetting('earnedAchievements', earnedAchievements);
+    }
+
     ownedPacks = mergedPacks;
     dbSetSetting('ownedPacks', ownedPacks);
-    dbClearSongs();
-    newSongs.forEach(s => dbPutSong(s));
-    dbClearPlaylists();
-    playlists.forEach(pl => dbPutPlaylist(pl));
-    currentSongId = null; audio.pause(); audio.src='';
+
+    checkAchievements();
     switchView('library');
     updatePlanInfo();
-    toast(`Bibliothek importiert: ${songs.length} Song(s) ✓`);
+    renderAll();
+    saveAutoBackup();
+    toast(`Zusammengeführt: +${brandNewSongs.length} neue Song(s), Playlists/Verlauf/Statistiken ergänzt ✓`);
     updateStorageInfo();
   }catch(e){
+    console.error('Import fehlgeschlagen:', e);
     toast('Fehler beim Importieren der Datei.');
   }
 }
@@ -4255,16 +4402,28 @@ async function boot(){
         adState = { totalBytes: savedAdState.totalBytes||0, watchesToday: savedAdState.watchesToday||0, lastDate: savedAdState.lastDate||'' };
       }
       checkAchievements();
+      restoreFromAutoBackupIfNeeded();
       if(songs.length) toast(`Gespeicherte Bibliothek geladen: ${songs.length} Song(s) ✓`);
     }catch(e){
       console.error('Konnte gespeicherte Bibliothek nicht laden:', e);
     }
   }
+  requestPersistentStorage();
+  saveAutoBackup();
   updateSortIndicators();
   renderAll();
   updateStorageInfo();
   registerServiceWorker();
   setupMediaSession();
+}
+// Bittet den Browser, den Speicher als "persistent" einzustufen, damit Songs, Playlists,
+// Verlauf und Statistiken bei Speicherdruck nicht automatisch vom Browser gelöscht werden.
+function requestPersistentStorage(){
+  try{
+    if(navigator.storage && navigator.storage.persist){
+      navigator.storage.persist().catch(() => {});
+    }
+  }catch(e){ /* nicht unterstützt — kein Problem */ }
 }
 boot();
 
