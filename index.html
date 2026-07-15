@@ -920,6 +920,7 @@
       <div class="selection-actions">
         <button class="btn btn-ghost" onclick="selectAllVisible()">Alle auswählen</button>
         <button class="btn" onclick="bulkAddToPlaylistPrompt()">+ Zu Playlist</button>
+        <button class="btn" onclick="downloadSelectedSongs()">⬇ Herunterladen</button>
         <button class="btn btn-ghost" style="color:var(--danger);" onclick="bulkDeleteSelected()">Löschen</button>
         <button class="btn btn-ghost" onclick="clearSelection()">Auswahl aufheben</button>
       </div>
@@ -3764,6 +3765,7 @@ function renderHeader(){
       actions.innerHTML = `
         <button class="btn btn-primary" onclick="playAllLibrary()">▶ Alle abspielen</button>
         <button class="btn" onclick="shufflePlayLibrary()">🔀 Zufällig</button>
+        <button class="btn" onclick="downloadAllSongs()">⬇ Alle als MP3</button>
         <button class="btn ${selectionMode?'btn-primary':'btn-ghost'}" onclick="toggleSelectionMode()">${selectionMode ? '✓ Fertig' : '☑ Auswählen'}</button>`;
     }
   } else if(currentView === 'albums'){
@@ -4263,6 +4265,65 @@ function guessAudioExt(blob, title){
   if(type.includes('m4a') || type.includes('mp4')) return 'm4a';
   if(blob && blob.name){ const m = blob.name.match(/\.([a-zA-Z0-9]+)$/); if(m) return m[1]; }
   return 'mp3';
+}
+
+/* ============================= ALLE / AUSGEWÄHLTE SONGS ALS MP3 HERUNTERLADEN ============================= */
+function sanitizeFileName(name){
+  return String(name||'').replace(/[\\/:*?"<>|]/g,'-').replace(/\s+/g,' ').trim();
+}
+async function downloadSongsAsZip(songList, zipName){
+  songList = songList.filter(s => s && s.blobRef);
+  if(!songList.length){ toast('Keine Songs zum Herunterladen.'); return; }
+
+  // Einzelner Song: direkt als Datei herunterladen, kein ZIP nötig
+  if(songList.length === 1){
+    const s = songList[0];
+    const ext = guessAudioExt(s.blobRef, s.title);
+    const a = document.createElement('a');
+    a.href = s.objectUrl;
+    a.download = (sanitizeFileName(`${s.artist} - ${s.title}`) || s.id) + '.' + ext;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toast('Download gestartet ✓');
+    return;
+  }
+
+  if(typeof JSZip === 'undefined'){ toast('Download-Bibliothek konnte nicht geladen werden — bitte Internetverbindung prüfen.'); return; }
+  toast(`Bereite Download vor… (${songList.length} Songs, das kann etwas dauern)`);
+  try{
+    const zip = new JSZip();
+    const usedNames = new Set();
+    songList.forEach(s => {
+      const ext = guessAudioExt(s.blobRef, s.title);
+      let base = sanitizeFileName(`${s.artist} - ${s.title}`) || s.id;
+      let fileName = base + '.' + ext;
+      let n = 2;
+      while(usedNames.has(fileName)){ fileName = `${base} (${n}).${ext}`; n++; }
+      usedNames.add(fileName);
+      zip.file(fileName, s.blobRef);
+    });
+    const blob = await zip.generateAsync({ type:'blob', compression:'STORE' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = zipName || 'bandlager-songs.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast(`${songList.length} Song(s) heruntergeladen ✓`);
+  }catch(e){
+    console.error('Download fehlgeschlagen:', e);
+    toast('Download fehlgeschlagen — die Auswahl ist evtl. zu groß für den Speicher des Browsers.');
+  }
+}
+function downloadAllSongs(){
+  downloadSongsAsZip(songs.slice(), 'bandlager-alle-songs.zip');
+}
+function downloadSelectedSongs(){
+  const list = Array.from(selectedSongIds).map(id => songs.find(s=>s.id===id)).filter(Boolean);
+  downloadSongsAsZip(list, 'bandlager-auswahl.zip');
 }
 
 async function handleLibraryImport(file){
