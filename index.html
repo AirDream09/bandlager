@@ -1984,10 +1984,10 @@ const FREE_TOTAL_CAP = 10 * 1024 * 1024 * 1024;    // max. 10 GB komplett kosten
 // (mehrfacher Kauf desselben Pakets ist möglich). Hier bei Bedarf weitere Pakete
 // ergänzen oder Preise/Größen anpassen.
 const STORAGE_PACKS = [
-  { id:'10gb',  label:'+10 GB',  bytes:10  * 1024 * 1024 * 1024, price:'1,99 €',  paymentUrl:'' },
-  { id:'20gb',  label:'+20 GB',  bytes:20  * 1024 * 1024 * 1024, price:'3,49 €',  paymentUrl:'' },
-  { id:'50gb',  label:'+50 GB',  bytes:50  * 1024 * 1024 * 1024, price:'7,49 €',  paymentUrl:'' },
-  { id:'100gb', label:'+100 GB', bytes:100 * 1024 * 1024 * 1024, price:'12,99 €', paymentUrl:'' },
+  { id:'10gb',  label:'+10 GB',  bytes:10  * 1024 * 1024 * 1024, price:'1,99 €',  paymentUrl:'https://soundcloud.com/air_floww/rockstar' },
+  { id:'20gb',  label:'+20 GB',  bytes:20  * 1024 * 1024 * 1024, price:'3,49 €',  paymentUrl:'https://soundcloud.com/air_floww/rockstar' },
+  { id:'50gb',  label:'+50 GB',  bytes:50  * 1024 * 1024 * 1024, price:'7,49 €',  paymentUrl:'https://soundcloud.com/air_floww/rockstar' },
+  { id:'100gb', label:'+100 GB', bytes:100 * 1024 * 1024 * 1024, price:'12,99 €', paymentUrl:'https://soundcloud.com/air_floww/rockstar' },
 ];
 // Codes, die (z.B. für Tester/Freunde) ein bestimmtes Paket kostenlos freischalten,
 // ohne dass ein Zahlungsanbieter angebunden sein muss.
@@ -2175,10 +2175,10 @@ function trackQueueSize(){
    Rewarded-Ad-Countdown; grantAdReward() kann später 1:1 aus dem "reward"-
    Callback eines echten Anbieters aufgerufen werden, statt aus dem Timer. */
 const AD_REWARD_BYTES = gb(0.1);   // Bonus pro angesehener Werbung
-const AD_DAILY_LIMIT = 3;          // max. Ansichten pro Kalendertag
-const AD_LIFETIME_CAP = gb(1);     // Obergrenze für insgesamt per Werbung freigeschalteten Speicher
+const AD_DAILY_LIMIT = 10;          // max. Ansichten pro Kalendertag
+const AD_LIFETIME_CAP = gb(5);     // Obergrenze für insgesamt per Werbung freigeschalteten Speicher
 const AD_DURATION_SECONDS = 30;    // Länge des eingeblendeten Werbevideos
-const AD_VIDEO_ID = 'jNQXAC9IVRw'; // Platzhalter-YouTube-ID — hier echte Werbevideo-ID eintragen
+const AD_VIDEO_ID = 'HVfgFLEx-qU'; // Platzhalter-YouTube-ID — hier echte Werbevideo-ID eintragen
 const AD_VIDEO_URL = `https://www.youtube.com/watch?v=${AD_VIDEO_ID}`;
 let adState = { totalBytes:0, watchesToday:0, lastDate:'' };
 
